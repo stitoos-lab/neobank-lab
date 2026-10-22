@@ -1,0 +1,25 @@
+services :
+  web :
+    image : nginx:alpine
+    networks : [dmz, app]
+    ports :
+      - "127.0.0.1:8080:80"
+    
+  api :
+    image : python:3.12-alpine
+    command : python -m http.server 8000
+    networks : [app, data]
+  
+  db :
+    image : postgres:16-alpine
+    environment :
+      POSTGRES_PASSWORD : aminestitou
+    networks : [data]
+
+networks :
+  dmz :
+  app :
+  data :
+    internal: true
+
+
