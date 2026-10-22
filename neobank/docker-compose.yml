@@ -16,6 +16,10 @@ services:
       DB_PASSWORD : ${DB_PASSWORD}
     networks : [app, data]
     depends_on: [db]
+    volumes :
+      - ./api:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    
   db :
     image : postgres:16-alpine
     environment :

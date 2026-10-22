@@ -1,1 +1,7 @@
+#variable d'environnement (mdp base de données)
 .env
+#environnement virtuel python et cache
+.venv/
+__pycache__/
+#données persistantes de postgresql
+pgdata/
