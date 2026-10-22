@@ -1,0 +1,15 @@
+services :
+  web:
+    image: nginx:alpine
+    networks : [labnet]
+    ports:
+      - "127.0.0.1:8080:80"
+
+  db : 
+    image : postgres:16-alpine
+    environment :
+      POSTGRES_PASSWORD : aminestitou
+    networks : [labnet]
+
+networks :
+  labnet : 
