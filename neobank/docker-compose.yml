@@ -14,6 +14,7 @@ services:
       DB_NAME : neobank
       DB_USER : neobank
       DB_PASSWORD : ${DB_PASSWORD}
+      JWT_SECRET : ${JWT_SECRET}
     networks : [app, data]
     depends_on: [db]
     volumes :

@@ -1,30 +1,53 @@
+import logging
 import os
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
+import jwt
 import psycopg
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 from psycopg.errors import UniqueViolation
+from pydantic import BaseModel, Field
 
-# Context for hashing passwords
+logger = logging.getLogger("neobank")
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+JWT_SECRET = os.environ["JWT_SECRET"]
+JWT_ALGO = "HS256"
+JWT_TTL_MIN = 15
+bearer = HTTPBearer()
+# hash factice : même temps de réponse si l'utilisateur n'existe pas
+DUMMY_HASH = pwd_context.hash("mot-de-passe-factice")
 
-#modele pour valider les données entrées par l'utilisateur
-#j'ai utilisé deux modèles pour contrer le problème de SQL injection
+
+# Pydantic valide les entrées. La protection contre l'injection SQL vient
+# des requêtes paramétrées (%s), pas des modèles.
 class AccountCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=8, max_length=72)
 
-#modele pour formater les donnes de l'API
+
 class AccountResponse(BaseModel):
     id: int
     username: str
-    balance: float
+    balance: Decimal
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str = Field(..., max_length=72)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
 
 app = FastAPI(title="Neobank API")
+
 
 def get_conn():
     return psycopg.connect(
@@ -35,6 +58,7 @@ def get_conn():
         connect_timeout=5,
     )
 
+
 @app.get("/health")
 def health():
     try:
@@ -44,34 +68,61 @@ def health():
         raise HTTPException(status_code=503, detail="database unavailable")
     return {"status": "ok", "db": "ok"}
 
+
 @app.post("/accounts", response_model=AccountResponse, status_code=201)
 def create_account(account: AccountCreate):
-    #je hash le mot de passe avant de l'enregistrer dans la base de données
-    hashed_password = get_password_hash(account.password)
+    hashed_password = pwd_context.hash(account.password)
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                INSERT INTO accounts (username, hashed_password)
+                VALUES (%s, %s)
+                RETURNING id, username, balance;
+                """,
+                (account.username, hashed_password),
+            ).fetchone()
+    except UniqueViolation:
+        raise HTTPException(status_code=409, detail="Ce nom d'utilisateur est déjà pris")
+    except psycopg.Error:
+        logger.exception("Erreur lors de la création du compte")
+        raise HTTPException(status_code=500, detail="Erreur de base de données")
+    return {"id": row[0], "username": row[1], "balance": row[2]}
 
-    try :
-        with get_conn() as conn :
-            with conn.cursor() as cur:
-            #sql injection impossible grace a la parametrisation (%s)
-                cur.execute(
-                    """
-                    INSERT INTO accounts (username, hashed_password)
-                    VALUES (%s, %s)
-                    RETURNING id, username, balance;
-                    """,
-                    (account.username, hashed_password)
-                )
-                new_account = cur.fetchone()
 
-                #valider dans la base de données
-                conn.commit()
-                return {
-                    "id": new_account[0],
-                    "username": new_account[1],
-                    "balance": float(new_account[2])
-                }
+@app.post("/login", response_model=TokenResponse)
+def login(data: LoginRequest):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, hashed_password FROM accounts WHERE username = %s",
+            (data.username,),
+        ).fetchone()
+    valid = pwd_context.verify(data.password, row[1] if row else DUMMY_HASH)
+    if not row or not valid:
+        raise HTTPException(status_code=401, detail="Identifiants invalides")
+    now = datetime.now(timezone.utc)
+    token = jwt.encode(
+        {"sub": str(row[0]), "iat": now, "exp": now + timedelta(minutes=JWT_TTL_MIN)},
+        JWT_SECRET,
+        algorithm=JWT_ALGO,
+    )
+    return {"access_token": token}
 
-    except UniqueViolation :
-        raise HTTPException(status_code=400, detail="Ce nom d'utilisateur est déjà pris")
-    except psycopg.Error as e:
-        raise HTTPException(status_code=500, detail="Erreur de base de données")   
+
+def current_user_id(creds: HTTPAuthorizationCredentials = Depends(bearer)) -> int:
+    try:
+        payload = jwt.decode(creds.credentials, JWT_SECRET, algorithms=[JWT_ALGO])
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Jeton invalide ou expiré")
+    return int(payload["sub"])
+
+
+@app.get("/me", response_model=AccountResponse)
+def me(user_id: int = Depends(current_user_id)):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, username, balance FROM accounts WHERE id = %s", (user_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="Compte introuvable")
+    return {"id": row[0], "username": row[1], "balance": row[2]}
