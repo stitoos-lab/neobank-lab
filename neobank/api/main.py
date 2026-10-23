@@ -126,3 +126,39 @@ def me(user_id: int = Depends(current_user_id)):
     if not row:
         raise HTTPException(status_code=401, detail="Compte introuvable")
     return {"id": row[0], "username": row[1], "balance": row[2]}
+
+class TransferRequest(BaseModel):
+    to_username: str
+    amount: Decimal = Field(..., gt=0, max_digits=15, decimal_places=2)
+
+
+@app.post("/transfers", status_code=201)
+def transfer(data: TransferRequest, user_id: int = Depends(current_user_id)):
+    try:
+        with get_conn() as conn:
+                dest = conn.execute(
+                    "SELECT id FROM accounts WHERE username = %s", (data.to_username,)
+                ).fetchone()
+                if not dest:
+                    raise HTTPException(status_code=404, detail="Destinataire introuvable")
+                to_id = dest[0]
+                if to_id == user_id:
+                    raise HTTPException(status_code=400, detail="Virement vers soi-même impossible")
+                # verrou dans l'ordre des id pour éviter les blocages croisés
+                rows = conn.execute(
+                    "SELECT id, balance FROM accounts WHERE id IN (%s, %s) ORDER BY id FOR UPDATE",
+                    (user_id, to_id),
+                ).fetchall()
+                balances = {r[0]: r[1] for r in rows}
+                if balances[user_id] < data.amount:
+                    raise HTTPException(status_code=400, detail="Solde insuffisant")
+                conn.execute("UPDATE accounts SET balance = balance - %s WHERE id = %s", (data.amount, user_id))
+                conn.execute("UPDATE accounts SET balance = balance + %s WHERE id = %s", (data.amount, to_id))
+                conn.execute(
+                    "INSERT INTO transfers (from_id, to_id, amount) VALUES (%s, %s, %s)",
+                    (user_id, to_id, data.amount),
+                )
+    except psycopg.Error:
+        logger.exception("Erreur lors du virement")
+        raise HTTPException(status_code=500, detail="Erreur de base de données")
+    return {"status": "ok"}
