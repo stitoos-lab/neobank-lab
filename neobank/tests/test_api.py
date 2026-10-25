@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
+import pyotp
+
 BASE = "http://127.0.0.1:8080"
 PWD = "MotDePasse123"
 
@@ -92,3 +94,15 @@ def test_no_double_spend_under_concurrency():
         codes = list(pool.map(lambda _: transfer(ha, b, "30.00").status_code, range(8)))
     assert codes.count(201) == 3  # 100 / 30 = 3 virements possibles, pas plus
     assert balance(ha) == "10.00"
+
+def test_2fa_flow():
+    name = new_user()
+    h = login(name)
+    secret = requests.post(f"{BASE}/2fa/setup", headers=h).json()["secret"]
+    totp = pyotp.TOTP(secret)
+    assert requests.post(f"{BASE}/2fa/enable", headers=h, json={"code": "000000"}).status_code == 400
+    assert requests.post(f"{BASE}/2fa/enable", headers=h, json={"code": totp.now()}).status_code == 200
+    creds = {"username": name, "password": PWD}
+    assert requests.post(f"{BASE}/login", json=creds).status_code == 401
+    assert requests.post(f"{BASE}/login", json={**creds, "otp": "000000"}).status_code == 401
+    assert requests.post(f"{BASE}/login", json={**creds, "otp": totp.now()}).status_code == 200

@@ -3,6 +3,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     username VARCHAR(50) UNIQUE NOT NULL,
     hashed_password VARCHAR(255) NOT NULL,
     balance DECIMAL(15, 2) NOT NULL DEFAULT 0.00 CONSTRAINT balance_non_negative CHECK (balance >= 0),
+    totp_secret VARCHAR(64),
+    totp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS transfers (

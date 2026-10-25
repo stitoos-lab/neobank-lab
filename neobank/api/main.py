@@ -10,6 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 from psycopg.errors import UniqueViolation
 from pydantic import BaseModel, Field
+import pyotp
 
 logger = logging.getLogger("neobank")
 
@@ -39,11 +40,15 @@ class AccountResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str = Field(..., max_length=72)
+    otp: str | None = Field(None, min_length=6, max_length=6)
 
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+class OtpCode(BaseModel):
+    code: str = Field(..., min_length=6, max_length=6)
 
 
 app = FastAPI(title="Neobank API")
@@ -94,12 +99,17 @@ def create_account(account: AccountCreate):
 def login(data: LoginRequest):
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT id, hashed_password FROM accounts WHERE username = %s",
+            "SELECT id, hashed_password, totp_secret, totp_enabled FROM accounts WHERE username = %s",
             (data.username,),
         ).fetchone()
     valid = pwd_context.verify(data.password, row[1] if row else DUMMY_HASH)
     if not row or not valid:
         raise HTTPException(status_code=401, detail="Identifiants invalides")
+    if row[3]:
+        if not data.otp:
+            raise HTTPException(status_code=401, detail="Code 2FA requis")
+        if not pyotp.TOTP(row[2]).verify(data.otp, valid_window=1):
+            raise HTTPException(status_code=401, detail="Identifiants invalides")
     now = datetime.now(timezone.utc)
     token = jwt.encode(
         {"sub": str(row[0]), "iat": now, "exp": now + timedelta(minutes=JWT_TTL_MIN)},
@@ -162,3 +172,30 @@ def transfer(data: TransferRequest, user_id: int = Depends(current_user_id)):
         logger.exception("Erreur lors du virement")
         raise HTTPException(status_code=500, detail="Erreur de base de données")
     return {"status": "ok"}
+
+@app.post("/2fa/setup")
+def twofa_setup(user_id: int = Depends(current_user_id)):
+    secret = pyotp.random_base32()
+    with get_conn() as conn:
+        row = conn.execute(
+            "UPDATE accounts SET totp_secret = %s WHERE id = %s AND totp_enabled = FALSE RETURNING username",
+            (secret, user_id),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=409, detail="2FA déjà activée")
+    uri = pyotp.TOTP(secret).provisioning_uri(name=row[0], issuer_name="NeoBank")
+    return {"secret": secret, "otpauth_uri": uri}
+
+
+@app.post("/2fa/enable")
+def twofa_enable(data: OtpCode, user_id: int = Depends(current_user_id)):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT totp_secret, totp_enabled FROM accounts WHERE id = %s", (user_id,)
+        ).fetchone()
+        if not row or not row[0] or row[1]:
+            raise HTTPException(status_code=400, detail="Configuration 2FA invalide")
+        if not pyotp.TOTP(row[0]).verify(data.code, valid_window=1):
+            raise HTTPException(status_code=400, detail="Code invalide")
+        conn.execute("UPDATE accounts SET totp_enabled = TRUE WHERE id = %s", (user_id,))
+    return {"status": "2FA activée"}

@@ -31,6 +31,8 @@ flowchart LR
 | api | db | Oui | L'application lit et écrit les données |
 | web | db | Non | La zone exposée ne touche jamais aux données |
 | db | Internet | Non | Zone `data` en réseau interne |
+| POST | /2fa/setup | Génère un secret TOTP pour l'utilisateur connecté |
+| POST | /2fa/enable | Active la 2FA après vérification d'un premier code |
 
 La segmentation est vérifiée automatiquement par `lab-phase1/test_segmentation.py`.
 
