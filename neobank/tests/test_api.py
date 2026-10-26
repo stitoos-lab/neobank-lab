@@ -131,3 +131,24 @@ def test_account_lockout_after_failed_logins():
         assert r.status_code == 401
     r = requests.post(f"{BASE}/login", json={"username": name, "password": PWD})
     assert r.status_code == 429
+
+def user_id(headers):
+    return requests.get(f"{BASE}/me", headers=headers).json()["id"]
+
+
+def test_fraud_large_transfer_to_new_beneficiary_is_blocked():
+    a, b = new_user(), new_user()
+    ha = login(a)
+    credit(a, 5000)
+    assert transfer(ha, b, "1000.00").status_code == 403
+    assert balance(ha) == "5000.00"
+    assert sql(f"SELECT count(*) FROM audit_log WHERE action='transfer_blocked' AND user_id={user_id(ha)};") == "1"
+
+
+def test_fraud_large_transfer_to_known_beneficiary_is_flagged_not_blocked():
+    a, b = new_user(), new_user()
+    ha = login(a)
+    credit(a, 5000)
+    assert transfer(ha, b, "100.00").status_code == 201
+    assert transfer(ha, b, "1000.00").status_code == 201
+    assert sql(f"SELECT count(*) FROM audit_log WHERE action='transfer_flagged' AND user_id={user_id(ha)};") == "1"

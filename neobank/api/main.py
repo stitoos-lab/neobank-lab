@@ -16,17 +16,19 @@ logger = logging.getLogger("neobank")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+#LES CONSTANTES ASI ZEBI
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGO = "HS256"
 JWT_TTL_MIN = 15
 LOCK_MAX_FAILS = 5
+FRAUD_BLOCK_SCORE = 60
+FRAUD_FLAG_SCORE = 30
 bearer = HTTPBearer()
 # hash factice : même temps de réponse si l'utilisateur n'existe pas
 DUMMY_HASH = pwd_context.hash("mot-de-passe-factice")
 
 
-# Pydantic valide les entrées. La protection contre l'injection SQL vient
-# des requêtes paramétrées (%s), pas des modèles.
+# Pydantic valide les entrée protection contre sql injection
 class AccountCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=8, max_length=72)
@@ -69,6 +71,26 @@ def audit(conn, action, user_id=None, ip=None, details=None):
         "INSERT INTO audit_log (user_id, action, ip, details) VALUES (%s, %s, %s, %s)",
         (user_id, action, ip, details)
     )
+
+def fraud_score(conn, user_id, to_id, amount, balance):
+    reasons = {}
+    if amount >= 1000:
+        reasons["montant_eleve"] = 40
+    known = conn.execute(
+        "SELECT 1 FROM transfers WHERE from_id = %s AND to_id = %s LIMIT 1",
+        (user_id, to_id),
+    ).fetchone()
+    if not known and amount >= 500:
+        reasons["nouveau_beneficiaire"] = 20
+    recent = conn.execute(
+        "SELECT count(*) FROM transfers WHERE from_id = %s AND created_at > now() - interval '10 minutes'",
+        (user_id,),
+    ).fetchone()[0]
+    if recent >= 5:
+        reasons["rafale"] = 40
+    if amount >= 100 and amount >= balance * Decimal("0.9"):
+        reasons["vidage_compte"] = 20
+    return sum(reasons.values()), reasons
 
 def client_ip(request: Request) -> str | None:
     return request.headers.get("x-real-ip")
@@ -169,34 +191,46 @@ class TransferRequest(BaseModel):
 
 
 @app.post("/transfers", status_code=201)
-def transfer(data: TransferRequest, user_id: int = Depends(current_user_id)):
+def transfer(data: TransferRequest, request: Request, user_id: int = Depends(current_user_id)):
+    ip = client_ip(request)
+    blocked = False
     try:
         with get_conn() as conn:
-                dest = conn.execute(
-                    "SELECT id FROM accounts WHERE username = %s", (data.to_username,)
-                ).fetchone()
-                if not dest:
-                    raise HTTPException(status_code=404, detail="Destinataire introuvable")
-                to_id = dest[0]
-                if to_id == user_id:
-                    raise HTTPException(status_code=400, detail="Virement vers soi-même impossible")
-                # verrou dans l'ordre des id pour éviter les blocages croisés
-                rows = conn.execute(
-                    "SELECT id, balance FROM accounts WHERE id IN (%s, %s) ORDER BY id FOR UPDATE",
-                    (user_id, to_id),
-                ).fetchall()
-                balances = {r[0]: r[1] for r in rows}
-                if balances[user_id] < data.amount:
-                    raise HTTPException(status_code=400, detail="Solde insuffisant")
+            dest = conn.execute(
+                "SELECT id FROM accounts WHERE username = %s", (data.to_username,)
+            ).fetchone()
+            if not dest:
+                raise HTTPException(status_code=404, detail="Destinataire introuvable")
+            to_id = dest[0]
+            if to_id == user_id:
+                raise HTTPException(status_code=400, detail="Virement vers soi-même impossible")
+            # verrou dans l'ordre des id pour éviter les blocages croisés
+            rows = conn.execute(
+                "SELECT id, balance FROM accounts WHERE id IN (%s, %s) ORDER BY id FOR UPDATE",
+                (user_id, to_id),
+            ).fetchall()
+            balances = {r[0]: r[1] for r in rows}
+            if balances[user_id] < data.amount:
+                raise HTTPException(status_code=400, detail="Solde insuffisant")
+            score, reasons = fraud_score(conn, user_id, to_id, data.amount, balances[user_id])
+            details = f"to={to_id} amount={data.amount} score={score} reasons={','.join(reasons)}"
+            if score >= FRAUD_BLOCK_SCORE:
+                audit(conn, "transfer_blocked", user_id, ip, details)
+                blocked = True
+            else:
                 conn.execute("UPDATE accounts SET balance = balance - %s WHERE id = %s", (data.amount, user_id))
                 conn.execute("UPDATE accounts SET balance = balance + %s WHERE id = %s", (data.amount, to_id))
                 conn.execute(
                     "INSERT INTO transfers (from_id, to_id, amount) VALUES (%s, %s, %s)",
                     (user_id, to_id, data.amount),
                 )
+                action = "transfer_flagged" if score >= FRAUD_FLAG_SCORE else "transfer"
+                audit(conn, action, user_id, ip, details)
     except psycopg.Error:
         logger.exception("Erreur lors du virement")
         raise HTTPException(status_code=500, detail="Erreur de base de données")
+    if blocked:
+        raise HTTPException(status_code=403, detail="Virement bloqué pour vérification")
     return {"status": "ok"}
 
 @app.post("/2fa/setup")
