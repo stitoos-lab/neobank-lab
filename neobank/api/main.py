@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import jwt
 import psycopg
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 from psycopg.errors import UniqueViolation
@@ -19,6 +19,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGO = "HS256"
 JWT_TTL_MIN = 15
+LOCK_MAX_FAILS = 5
 bearer = HTTPBearer()
 # hash factice : même temps de réponse si l'utilisateur n'existe pas
 DUMMY_HASH = pwd_context.hash("mot-de-passe-factice")
@@ -63,6 +64,14 @@ def get_conn():
         connect_timeout=5,
     )
 
+def audit(conn, action, user_id=None, ip=None, details=None):
+    conn.execute(
+        "INSERT INTO audit_log (user_id, action, ip, details) VALUES (%s, %s, %s, %s)",
+        (user_id, action, ip, details)
+    )
+
+def client_ip(request: Request) -> str | None:
+    return request.headers.get("x-real-ip")
 
 @app.get("/health")
 def health():
@@ -96,20 +105,37 @@ def create_account(account: AccountCreate):
 
 
 @app.post("/login", response_model=TokenResponse)
-def login(data: LoginRequest):
+def login(data: LoginRequest, request: Request):
+    ip = client_ip(request)
+    status, error, row = 401, None, None
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT id, hashed_password, totp_secret, totp_enabled FROM accounts WHERE username = %s",
+        fails = conn.execute(
+            "SELECT count(*) FROM audit_log "
+            "WHERE action IN ('login_failed', 'login_failed_2fa') "
+            "AND details = %s AND ts > now() - interval '15 minutes'",
             (data.username,),
-        ).fetchone()
-    valid = pwd_context.verify(data.password, row[1] if row else DUMMY_HASH)
-    if not row or not valid:
-        raise HTTPException(status_code=401, detail="Identifiants invalides")
-    if row[3]:
-        if not data.otp:
-            raise HTTPException(status_code=401, detail="Code 2FA requis")
-        if not pyotp.TOTP(row[2]).verify(data.otp, valid_window=1):
-            raise HTTPException(status_code=401, detail="Identifiants invalides")
+        ).fetchone()[0]
+        if fails >= LOCK_MAX_FAILS:
+            audit(conn, "login_locked", None, ip, data.username)
+            status, error = 429, "Trop de tentatives, réessayez plus tard"
+        else:
+            row = conn.execute(
+                "SELECT id, hashed_password, totp_secret, totp_enabled FROM accounts WHERE username = %s",
+                (data.username,),
+            ).fetchone()
+            valid = pwd_context.verify(data.password, row[1] if row else DUMMY_HASH)
+            if not row or not valid:
+                audit(conn, "login_failed", row[0] if row else None, ip, data.username)
+                error = "Identifiants invalides"
+            elif row[3] and not data.otp:
+                error = "Code 2FA requis"
+            elif row[3] and not pyotp.TOTP(row[2]).verify(data.otp, valid_window=1):
+                audit(conn, "login_failed_2fa", row[0], ip, data.username)
+                error = "Identifiants invalides"
+            else:
+                audit(conn, "login_ok", row[0], ip, data.username)
+    if error:
+        raise HTTPException(status_code=status, detail=error)
     now = datetime.now(timezone.utc)
     token = jwt.encode(
         {"sub": str(row[0]), "iat": now, "exp": now + timedelta(minutes=JWT_TTL_MIN)},

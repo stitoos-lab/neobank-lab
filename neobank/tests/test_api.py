@@ -106,3 +106,28 @@ def test_2fa_flow():
     assert requests.post(f"{BASE}/login", json=creds).status_code == 401
     assert requests.post(f"{BASE}/login", json={**creds, "otp": "000000"}).status_code == 401
     assert requests.post(f"{BASE}/login", json={**creds, "otp": totp.now()}).status_code == 200
+
+def sql(query):
+    out = subprocess.run(
+        ["docker", "compose", "exec", "-T", "db", "psql", "-U", "neobank", "-d", "neobank", "-t", "-A", "-c", query],
+        check=True, capture_output=True, text=True,
+    )
+    return out.stdout.strip()
+
+def test_audit_log_records_and_is_immutable():
+    name = new_user()
+    requests.post(f"{BASE}/login", json={"username": name, "password": "mauvais-mot-de-passe"})
+    assert sql(f"SELECT count(*) FROM audit_log WHERE action='login_failed' AND details='{name}';") == "1"
+    attempt = subprocess.run(
+        ["docker", "compose", "exec", "-T", "db", "psql", "-U", "neobank", "-d", "neobank", "-c", "DELETE FROM audit_log;"],
+        capture_output=True,
+    )
+    assert attempt.returncode != 0
+
+def test_account_lockout_after_failed_logins():
+    name = new_user()
+    for _ in range(5):
+        r = requests.post(f"{BASE}/login", json={"username": name, "password": "mauvais-mot-de-passe"})
+        assert r.status_code == 401
+    r = requests.post(f"{BASE}/login", json={"username": name, "password": PWD})
+    assert r.status_code == 429

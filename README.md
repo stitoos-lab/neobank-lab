@@ -95,6 +95,8 @@ Les 9 tests couvrent la validation des entrées, l'authentification, les viremen
 - Jeton JWT de 15 minutes, algorithme imposé au décodage.
 - L'API s'exécute sans droits administrateur dans son conteneur.
 - Secrets dans `.env`, exclu du dépôt.
+- Journal d'audit en ajout seul (trigger PostgreSQL) : connexions, virements, activation de la 2FA.
+- Limitation de débit à deux niveaux : par IP dans nginx (429) et verrouillage d'un compte après 5 échecs en 15 minutes.
 
 ## Scanner de ports
 

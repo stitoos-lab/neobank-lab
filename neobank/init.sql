@@ -15,3 +15,22 @@ CREATE TABLE IF NOT EXISTS transfers (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CHECK (from_id <> to_id)
 );
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGSERIAL PRIMARY KEY,
+    ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+    user_id INT,
+    action VARCHAR(50) NOT NULL,
+    ip VARCHAR(45),
+    details TEXT
+);
+
+CREATE OR REPLACE FUNCTION audit_log_immutable() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_log est en ajout seulement';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS audit_log_trigger ON audit_log;
+CREATE TRIGGER audit_log_no_change
+BEFORE UPDATE OR DELETE ON audit_log
+FOR EACH ROW EXECUTE FUNCTION audit_log_immutable();;
