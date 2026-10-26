@@ -23,16 +23,16 @@ flowchart LR
     W --> A
     A --> D
 ```
+## Endpoints
 
-| Source | Destination | Autorisé | Raison |
-| --- | --- | --- | --- |
-| Hôte | web :8080 | Oui | Seul point d'entrée |
-| web | api | Oui | Le proxy relaie vers l'application |
-| api | db | Oui | L'application lit et écrit les données |
-| web | db | Non | La zone exposée ne touche jamais aux données |
-| db | Internet | Non | Zone `data` en réseau interne |
-| POST | /2fa/setup | Génère un secret TOTP pour l'utilisateur connecté |
-| POST | /2fa/enable | Active la 2FA après vérification d'un premier code |
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| POST | `/accounts` | Création de compte |
+| POST | `/login` | Connexion, renvoie un jeton JWT (15 min) |
+| GET | `/me` | Informations du compte de l'utilisateur connecté |
+| POST | `/transfers` | Virement atomique entre comptes |
+| POST | `/2fa/setup` | Génère un secret TOTP et une URI de provisionnement |
+| POST | `/2fa/enable`| Active définitivement la 2FA après validation du premier code |
 
 La segmentation est vérifiée automatiquement par `lab-phase1/test_segmentation.py`.
 
@@ -81,7 +81,7 @@ pip install pytest requests
 cd neobank && python -m pytest tests -v
 ```
 
-Les 9 tests couvrent la validation des entrées, l'authentification, les virements (solde insuffisant, montant négatif, virement vers soi-même) et la double dépense : 8 virements simultanés sur un compte qui n'en permet que 3.
+L'API est couverte par une suite de 14 tests automatiques vérifiant le comportement nominal, les rejets de sécurité (mots de passe faibles, doublons), les flux 2FA, la concurrence (8 virements simultanés) et le verrouillage anti-bruteforce.
 
 ## Choix de sécurité
 
