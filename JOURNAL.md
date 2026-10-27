@@ -1,4 +1,3 @@
-```markdown
 # Journal des incidents et apprentissages
 
 Ce document trace les problèmes techniques rencontrés durant la construction du Lab et leurs résolutions.
