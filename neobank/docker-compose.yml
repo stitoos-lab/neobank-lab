@@ -21,6 +21,7 @@ services:
     depends_on: [db]
     volumes :
       - ./api:/app
+      - ./logs/api:/var/log/neobank
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     
   db :

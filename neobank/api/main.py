@@ -12,7 +12,19 @@ from psycopg.errors import UniqueViolation
 from pydantic import BaseModel, Field
 import pyotp
 
+import json
+
 logger = logging.getLogger("neobank")
+
+audit_file = logging.getLogger("neobank.audit")
+audit_file.setLevel(logging.INFO)
+audit_file.propagate = False
+try:
+    _handler = logging.FileHandler("/var/log/neobank/audit.log")
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    audit_file.addHandler(_handler)
+except OSError:
+    logger.warning("audit.log indisponible : journal fichier désactivé")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -69,8 +81,15 @@ def get_conn():
 def audit(conn, action, user_id=None, ip=None, details=None):
     conn.execute(
         "INSERT INTO audit_log (user_id, action, ip, details) VALUES (%s, %s, %s, %s)",
-        (user_id, action, ip, details)
+        (user_id, action, ip, details),
     )
+    audit_file.info(json.dumps({
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "action": action,
+        "user_id": user_id,
+        "srcip": ip,
+        "details": details,
+    }))
 
 def fraud_score(conn, user_id, to_id, amount, balance):
     reasons = {}
