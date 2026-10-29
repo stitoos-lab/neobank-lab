@@ -31,6 +31,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS audit_log_trigger ON audit_log;
-CREATE TRIGGER audit_log_no_change
+CREATE TRIGGER audit_log_trigger
 BEFORE UPDATE OR DELETE ON audit_log
-FOR EACH ROW EXECUTE FUNCTION audit_log_immutable();;
+FOR EACH ROW EXECUTE FUNCTION audit_log_immutable();

@@ -63,28 +63,3 @@ Ce document trace les problèmes techniques rencontrés durant la construction d
   3. `docker compose up -d --force-recreate wazuh.manager`
   4. Vérifier via `docker inspect` que `Source` pointe vers le fichier versionné
 - **Résultat** : une seule source de vérité (`wazuh/local_rules.xml` versionné dans le repo NeoBank), le compose reflète la réalité, plus de doublon à maintenir. Validé bout en bout : `curl` login raté → alerte `100100` dans `alerts.json` en <1s.
-
-
-
----
-
-## 3. `wazuh/README.md` — nouveau fichier
-
-Si tu ne l'as pas encore, crée `~/neobank-lab/wazuh/README.md` :
-
-```markdown
-# Wazuh — règles de détection NeoBank
-
-Ce dossier contient la règle de supervision Wazuh pour l'API NeoBank. Elle est chargée dans un manager Wazuh (single-node ou cluster) qui écoute l'agent local surveillant `logs/api/audit.log`.
-
-## Contenu
-
-- `local_rules.xml` — 7 règles (100100 à 100106) alignées sur les actions du journal d'audit
-- `install.sh` — copie la règle dans un conteneur Wazuh manager et redémarre le service
-
-## Installation
-
-Prérequis : un manager Wazuh qui tourne, conteneur nommé `single-node-wazuh.manager-1` (adapter `CTN` dans le script sinon).
-
-```bash
-bash wazuh/install.sh

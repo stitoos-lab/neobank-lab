@@ -28,7 +28,7 @@ except OSError:
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-#LES CONSTANTES ASI ZEBI
+#LES CONSTANTES 
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGO = "HS256"
 JWT_TTL_MIN = 15
@@ -40,7 +40,7 @@ bearer = HTTPBearer()
 DUMMY_HASH = pwd_context.hash("mot-de-passe-factice")
 
 
-# Pydantic valide les entrée protection contre sql injection
+# requete parametre valide les entrée protection contre sql injection
 class AccountCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=8, max_length=72)

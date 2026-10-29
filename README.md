@@ -43,7 +43,6 @@ La segmentation est vérifiée automatiquement par `lab-phase1/test_segmentation
 | Phase 0 | Bases réseau (Wireshark), scanner de ports Python, premier lab Docker | Fait |
 | Phase 1 | Segmentation en trois zones, tableau des flux, test automatique | Fait |
 | Phase 2 | API FastAPI : comptes, connexion JWT, virements atomiques, 9 tests pytest | Fait |
-| Phase 2 (suite) | Double authentification TOTP, journal d'audit, limitation de débit, détection de fraude | En cours |
 | Phase 3 | Supervision (Wazuh) et règles de détection | Fait |
 | Phase 4 | Attaque depuis Kali (OWASP API Top 10), rapport de pentest, correctifs et re-test | À faire |
 | Phase 5 | CI/CD avec analyses de sécurité, mapping PCI DSS / PSD2 / DORA | À faire |
