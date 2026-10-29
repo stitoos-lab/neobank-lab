@@ -85,7 +85,7 @@ def audit(conn, action, user_id=None, ip=None, details=None):
     )
     audit_file.info(json.dumps({
         "ts": datetime.now(timezone.utc).isoformat(),
-        "action": action,
+        "audit_action": action,
         "user_id": user_id,
         "srcip": ip,
         "details": details,

@@ -1,0 +1,52 @@
+<!-- NeoBank lab rules -->
+<group name="neobank,">
+  <rule id="100100" level="5">
+    <decoded_as>json</decoded_as>
+    <field name="audit_action">login_failed</field>
+    <description>NeoBank: échec de connexion</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+  </rule>
+
+  <rule id="100101" level="7">
+    <decoded_as>json</decoded_as>
+    <field name="audit_action">login_locked</field>
+    <description>NeoBank: compte verrouillé après échecs répétés</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+  </rule>
+
+  <rule id="100102" level="10">
+    <decoded_as>json</decoded_as>
+    <field name="audit_action">transfer_blocked</field>
+    <description>NeoBank: virement bloqué (détection de fraude)</description>
+  </rule>
+    <!-- Connexions -->
+  <rule id="100103" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="audit_action">login_ok</field>
+    <description>NeoBank: connexion réussie</description>
+  </rule>
+
+  <rule id="100104" level="6">
+    <decoded_as>json</decoded_as>
+    <field name="audit_action">login_failed_2fa</field>
+    <description>NeoBank: code 2FA invalide</description>
+    <mitre><id>T1110</id></mitre>
+  </rule>
+
+  <!-- Virements -->
+  <rule id="100105" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="audit_action">transfer</field>
+    <description>NeoBank: virement effectué</description>
+  </rule>
+
+  <rule id="100106" level="8">
+    <decoded_as>json</decoded_as>
+    <field name="audit_action">transfer_flagged</field>
+    <description>NeoBank: virement suspect signalé (score fraude)</description>
+  </rule>
+</group>

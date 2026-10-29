@@ -44,7 +44,7 @@ La segmentation est vérifiée automatiquement par `lab-phase1/test_segmentation
 | Phase 1 | Segmentation en trois zones, tableau des flux, test automatique | Fait |
 | Phase 2 | API FastAPI : comptes, connexion JWT, virements atomiques, 9 tests pytest | Fait |
 | Phase 2 (suite) | Double authentification TOTP, journal d'audit, limitation de débit, détection de fraude | En cours |
-| Phase 3 | Supervision (Wazuh) et règles de détection | À faire |
+| Phase 3 | Supervision (Wazuh) et règles de détection | Fait |
 | Phase 4 | Attaque depuis Kali (OWASP API Top 10), rapport de pentest, correctifs et re-test | À faire |
 | Phase 5 | CI/CD avec analyses de sécurité, mapping PCI DSS / PSD2 / DORA | À faire |
 
@@ -55,6 +55,8 @@ scanner.py          Scanner de ports TCP (sockets, bannières, sortie JSON)
 lab-phase0/         Premier réseau Docker isolé (web + db)
 lab-phase1/         Segmentation en trois zones + test de segmentation
 neobank/            API bancaire (FastAPI, PostgreSQL, nginx) et ses tests
+wazuh/              Règles de détection Wazuh + script d'installation
+
 ```
 
 ## Lancer l'API
@@ -97,6 +99,26 @@ L'API est couverte par une suite de 14 tests automatiques vérifiant le comporte
 - Secrets dans `.env`, exclu du dépôt.
 - Journal d'audit en ajout seul (trigger PostgreSQL) : connexions, virements, activation de la 2FA.
 - Limitation de débit à deux niveaux : par IP dans nginx (429) et verrouillage d'un compte après 5 échecs en 15 minutes.
+
+## Supervision (Phase 3)
+
+L'API écrit un journal d'audit JSON-lignes dans `/var/log/neobank/audit.log` (monté sur l'hôte via `./logs/api:/var/log/neobank`). Un agent Wazuh local surveille ce fichier et déclenche des alertes selon 7 règles custom :
+
+| ID | Action | Niveau | Description |
+| --- | --- | --- | --- |
+| 100100 | `login_failed` | 5 | Échec de connexion (T1110) |
+| 100101 | `login_locked` | 7 | Compte verrouillé après échecs répétés (T1110) |
+| 100102 | `transfer_blocked` | 10 | Virement bloqué (détection de fraude) |
+| 100103 | `login_ok` | 3 | Connexion réussie |
+| 100104 | `login_failed_2fa` | 6 | Code 2FA invalide (T1110) |
+| 100105 | `transfer` | 3 | Virement effectué |
+| 100106 | `transfer_flagged` | 8 | Virement suspect signalé (score fraude) |
+
+La chaîne complète (API → fichier → agent → manager → alerte) est validée bout en bout : un `curl` sur `/login` avec un mauvais mot de passe produit une alerte `100100` dans `/var/ossec/logs/alerts/alerts.json` en moins d'une seconde.
+
+Installation : voir `wazuh/README.md`. La règle est versionnée dans `wazuh/local_rules.xml`, et le `docker-compose.yml` du stack Wazuh la monte en bind sur `/var/ossec/etc/rules/local_rules.xml`.
+
+Détails des pannes rencontrées et de leurs résolutions dans `JOURNAL.md` (entrées 6 à 11).
 
 ## Scanner de ports
 
