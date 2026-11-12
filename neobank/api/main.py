@@ -66,7 +66,12 @@ class OtpCode(BaseModel):
     code: str = Field(..., min_length=6, max_length=6)
 
 
-app = FastAPI(title="Neobank API")
+app = FastAPI(
+    title="Neobank API",
+    docs_url=None if os.getenv("ENV") == "prod" else "/docs",
+    redoc_url=None if os.getenv("ENV") == "prod" else "/redoc",
+    openapi_url=None if os.getenv("ENV") == "prod" else "/openapi.json"
+    )
 
 
 def get_conn():
@@ -150,11 +155,15 @@ def login(data: LoginRequest, request: Request):
     ip = client_ip(request)
     status, error, row = 401, None, None
     with get_conn() as conn:
+        # F-02 : lockout basé sur (username, IP) et non username seul.
+        # IS NOT DISTINCT FROM gère le cas où ip est NULL (dev direct sans nginx).
         fails = conn.execute(
             "SELECT count(*) FROM audit_log "
             "WHERE action IN ('login_failed', 'login_failed_2fa') "
-            "AND details = %s AND ts > now() - interval '15 minutes'",
-            (data.username,),
+            "AND details = %s "
+            "AND ip IS NOT DISTINCT FROM %s "
+            "AND ts > now() - interval '15 minutes'",
+            (data.username, ip),
         ).fetchone()[0]
         if fails >= LOCK_MAX_FAILS:
             audit(conn, "login_locked", None, ip, data.username)
@@ -207,12 +216,14 @@ def me(user_id: int = Depends(current_user_id)):
 class TransferRequest(BaseModel):
     to_username: str
     amount: Decimal = Field(..., gt=0, max_digits=15, decimal_places=2)
+    otp: str | None = Field(None, min_length=6, max_length=6)
 
 
 @app.post("/transfers", status_code=201)
 def transfer(data: TransferRequest, request: Request, user_id: int = Depends(current_user_id)):
     ip = client_ip(request)
     blocked = False
+    auth_failed = False
     try:
         with get_conn() as conn:
             dest = conn.execute(
@@ -225,29 +236,42 @@ def transfer(data: TransferRequest, request: Request, user_id: int = Depends(cur
                 raise HTTPException(status_code=400, detail="Virement vers soi-même impossible")
             # verrou dans l'ordre des id pour éviter les blocages croisés
             rows = conn.execute(
-                "SELECT id, balance FROM accounts WHERE id IN (%s, %s) ORDER BY id FOR UPDATE",
+                "SELECT id, balance, totp_secret, totp_enabled "
+                "FROM accounts WHERE id IN (%s, %s) ORDER BY id FOR UPDATE",
                 (user_id, to_id),
             ).fetchall()
-            balances = {r[0]: r[1] for r in rows}
-            if balances[user_id] < data.amount:
-                raise HTTPException(status_code=400, detail="Solde insuffisant")
-            score, reasons = fraud_score(conn, user_id, to_id, data.amount, balances[user_id])
-            details = f"to={to_id} amount={data.amount} score={score} reasons={','.join(reasons)}"
-            if score >= FRAUD_BLOCK_SCORE:
-                audit(conn, "transfer_blocked", user_id, ip, details)
-                blocked = True
-            else:
-                conn.execute("UPDATE accounts SET balance = balance - %s WHERE id = %s", (data.amount, user_id))
-                conn.execute("UPDATE accounts SET balance = balance + %s WHERE id = %s", (data.amount, to_id))
-                conn.execute(
-                    "INSERT INTO transfers (from_id, to_id, amount) VALUES (%s, %s, %s)",
-                    (user_id, to_id, data.amount),
-                )
-                action = "transfer_flagged" if score >= FRAUD_FLAG_SCORE else "transfer"
-                audit(conn, action, user_id, ip, details)
+            info = {r[0]: {"balance": r[1], "totp_secret": r[2], "totp_enabled": r[3]} for r in rows}
+            balances = {uid: i["balance"] for uid, i in info.items()}
+
+            # F-01 : vérifier la 2FA si elle est activée pour l'expéditeur
+            sender = info[user_id]
+            if sender["totp_enabled"]:
+                if not data.otp or not pyotp.TOTP(sender["totp_secret"]).verify(data.otp, valid_window=1):
+                    audit(conn, "transfer_failed_2fa", user_id, ip, f"to={to_id}")
+                    auth_failed = True
+
+            if not auth_failed:
+                if balances[user_id] < data.amount:
+                    raise HTTPException(status_code=400, detail="Solde insuffisant")
+                score, reasons = fraud_score(conn, user_id, to_id, data.amount, balances[user_id])
+                details = f"to={to_id} amount={data.amount} score={score} reasons={','.join(reasons)}"
+                if score >= FRAUD_BLOCK_SCORE:
+                    audit(conn, "transfer_blocked", user_id, ip, details)
+                    blocked = True
+                else:
+                    conn.execute("UPDATE accounts SET balance = balance - %s WHERE id = %s", (data.amount, user_id))
+                    conn.execute("UPDATE accounts SET balance = balance + %s WHERE id = %s", (data.amount, to_id))
+                    conn.execute(
+                        "INSERT INTO transfers (from_id, to_id, amount) VALUES (%s, %s, %s)",
+                        (user_id, to_id, data.amount),
+                    )
+                    action = "transfer_flagged" if score >= FRAUD_FLAG_SCORE else "transfer"
+                    audit(conn, action, user_id, ip, details)
     except psycopg.Error:
         logger.exception("Erreur lors du virement")
         raise HTTPException(status_code=500, detail="Erreur de base de données")
+    if auth_failed:
+        raise HTTPException(status_code=401, detail="Authentification renforcée requise")
     if blocked:
         raise HTTPException(status_code=403, detail="Virement bloqué pour vérification")
     return {"status": "ok"}

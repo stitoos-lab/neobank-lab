@@ -63,3 +63,21 @@ Ce document trace les problèmes techniques rencontrés durant la construction d
   3. `docker compose up -d --force-recreate wazuh.manager`
   4. Vérifier via `docker inspect` que `Source` pointe vers le fichier versionné
 - **Résultat** : une seule source de vérité (`wazuh/local_rules.xml` versionné dans le repo NeoBank), le compose reflète la réalité, plus de doublon à maintenir. Validé bout en bout : `curl` login raté → alerte `100100` dans `alerts.json` en <1s.
+
+### 12. Phase 4 — Pentest de l'API NeoBank
+
+Un audit de sécurité a été mené sur l'API (`neobank/pentest/RAPPORT.md`), basé sur l'OWASP API Security Top 10 (2023). Huit findings identifiés, six corrigés à ce jour.
+
+**Findings corrigés** :
+
+- **F-01 (Haute)** — 2FA non appliquée aux virements. Un JWT valide permettait de virer sans OTP, même si la 2FA était activée. Correctif : champ `otp` dans `TransferRequest`, vérification `pyotp.TOTP(...).verify(otp, valid_window=1)` si `totp_enabled`, message générique `"Authentification renforcée requise"`. Re-test OK : `401` sans OTP, `201` avec OTP valide, pas de régression sur les comptes sans 2FA.
+- **F-02 (Moyenne)** — Lockout DoS ciblé. 5 mauvais mots de passe sur un username verrouillaient le compte globalement (15 min). Correctif : filtre `(username, ip)` au lieu de `username` seul dans la requête de comptage (`AND ip IS NOT DISTINCT FROM %s`). Re-test OK : verrouillage d'une IP, une autre IP peut se connecter.
+- **F-04 (Moyenne)** — `/docs`, `/redoc`, `/openapi.json` exposés. Correctif : constructeur `FastAPI` conditionnel sur `os.getenv("ENV") == "prod"`, ajout de `ENV: prod` dans `docker-compose.yml`. Re-test OK : `404` × 3 en prod, login toujours `200`.
+- **F-05 (Basse)** — Rate-limit nginx permissif (`burst=30` → ~38 req avant `429`). Correctif : `burst=10`. Re-test OK : ~12 req avant `429`.
+- **F-07 (Basse)** — Headers de sécurité manquants + version nginx révélée. Correctif : `server_tokens off` + `add_header X-Content-Type-Options / X-Frame-Options / Referrer-Policy / Permissions-Policy`. Re-test OK.
+- **F-08 (Basse)** — `uvicorn --reload` en environnement exposé. Correctif : retrait du flag `--reload` dans `docker-compose.yml`. Conséquence : `docker compose restart api` requis à chaque modif de `main.py`.
+
+**Findings confirmés, à corriger** :
+
+- **F-03 (Basse)** — Énumération d'usernames via `/transfers` (`404` si inconnu, `4xx ≠ 404` si existant).
+- **F-06 (Moyenne)** — Fraud scoring contournable : 5 virements × 499€ sous les seuils (montant_eleve, nouveau_beneficiaire), 6ᵉ virement flaggé (rafale) mais jamais bloqué. 2994€ déplacés en 1 minute sans blocage.
